@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+import io
 
 import torch
 
@@ -45,19 +45,25 @@ def _small_train_cfg() -> TrainConfig:
     )
 
 
-def test_export_bundle_can_be_loaded(tmp_path: Path) -> None:
+def _payload_to_buffer(payload: dict) -> io.BytesIO:
+    buffer = io.BytesIO()
+    torch.save(payload, buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def test_export_bundle_can_be_loaded() -> None:
     cfg = _small_train_cfg()
     model = build_model(cfg).eval()
 
-    export_path = tmp_path / "export.pt"
     payload = {
         "state_dict": model.state_dict(),
         "model_config": _model_config_from_train_cfg(cfg),
         "preprocess": {"mean": DEFAULT_MEAN, "std": DEFAULT_STD},
     }
-    torch.save(payload, export_path)
+    export_buffer = _payload_to_buffer(payload)
 
-    loaded_model, preprocess = load_exported_model(export_path, torch.device("cpu"))
+    loaded_model, preprocess = load_exported_model(export_buffer, torch.device("cpu"))
     assert preprocess["mean"] == DEFAULT_MEAN
     assert preprocess["std"] == DEFAULT_STD
 
@@ -67,21 +73,20 @@ def test_export_bundle_can_be_loaded(tmp_path: Path) -> None:
     assert y.ndim == 5
 
 
-def test_export_bundle_deploy_state_dict_autodetect(tmp_path: Path) -> None:
+def test_export_bundle_deploy_state_dict_autodetect() -> None:
     cfg = _small_train_cfg()
     model = build_model(cfg).eval()
     model.switch_to_deploy()
 
-    export_path = tmp_path / "export_deploy.pt"
     payload = {
         # Simulate old export files that have deploy weights but no fastvit.deploy flag.
         "state_dict": model.state_dict(),
         "model_config": _model_config_from_train_cfg(cfg),
         "preprocess": {"mean": DEFAULT_MEAN, "std": DEFAULT_STD},
     }
-    torch.save(payload, export_path)
+    export_buffer = _payload_to_buffer(payload)
 
-    loaded_model, _ = load_exported_model(export_path, torch.device("cpu"))
+    loaded_model, _ = load_exported_model(export_buffer, torch.device("cpu"))
 
     x = torch.randn(1, 3, 32, 32)
     with torch.no_grad():

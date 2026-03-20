@@ -62,3 +62,5 @@ external/
 # Temporary files
 *.tmp
 *.temp
+.pytest_tmp_local/
+
