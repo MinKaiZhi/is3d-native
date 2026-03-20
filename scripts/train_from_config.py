@@ -3,8 +3,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import torch
-
 from is3d_native.config import load_train_config
 from is3d_native.training import run_training_loop
 
@@ -19,7 +17,13 @@ def parse_args() -> argparse.Namespace:
         "--output-checkpoint",
         type=Path,
         default=Path("artifacts/checkpoints/is3d_latest.pt"),
-        help="Checkpoint path for trained weights (state_dict).",
+        help="Checkpoint path for trained weights and optimizer/scaler state.",
+    )
+    parser.add_argument(
+        "--resume-from-checkpoint",
+        type=Path,
+        default=None,
+        help="Resume training from a previous checkpoint.",
     )
     parser.add_argument(
         "--switch-to-deploy",
@@ -40,11 +44,11 @@ def main() -> None:
     if args.num_workers is not None:
         cfg.dataloader_workers = args.num_workers
 
-    model = run_training_loop(cfg)
-
-    args.output_checkpoint.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"state_dict": model.state_dict()}, args.output_checkpoint)
-    print(f"Saved checkpoint: {args.output_checkpoint}")
+    model = run_training_loop(
+        cfg,
+        resume_from_checkpoint=args.resume_from_checkpoint,
+        output_checkpoint=args.output_checkpoint,
+    )
 
     if args.switch_to_deploy:
         model.switch_to_deploy()
@@ -53,3 +57,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

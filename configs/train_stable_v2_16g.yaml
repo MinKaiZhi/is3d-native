@@ -1,0 +1,39 @@
+# Stable v2 profile for RTX 5080 16G (Windows native)
+# Adds token-mask warmup ramp for faster early convergence and smoother late regularization.
+
+batch_size: 2
+steps: 20000
+lr: 0.00007
+weight_decay: 0.015
+grad_accum_steps: 8
+grad_clip_norm: 0.7
+lr_warmup_steps: 500
+lr_min_ratio: 0.15
+use_cosine_lr: true
+
+use_bf16_amp: true
+checkpoint_segments: true
+log_every: 50
+snapshot_dir: artifacts/nan_snapshots
+
+# Real-data training config (CO3D WebDataset shards)
+train_shards: D:/datasets/co3dv2_wds/shard-*.tar
+train_key_include: __images__
+dataloader_workers: 4
+wds_shuffle_buffer: 4096
+
+image_size: 128
+in_channels: 3
+
+fastvit_embed_dim: 256
+fastvit_depth: 6
+fastvit_num_heads: 8
+fastvit_patch_size: 8
+
+triplane_depth: 4
+triplane_num_heads: 8
+triplane_channels: 24
+triplane_resolution: 32
+triplane_token_mask_ratio: 0.12
+token_mask_start_ratio: 0.02
+token_mask_warmup_steps: 3000

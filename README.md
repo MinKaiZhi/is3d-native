@@ -1,4 +1,4 @@
-﻿# is3d-native
+# is3d-native
 
 Windows 原生环境下的 is3d（FastViT + TriPlane）训练工程起步版本。
 
@@ -33,7 +33,7 @@ python .\scripts\download_co3d_dataset.py --single-sequence-subset --install-req
 
 # 4) 训练（可选训练后切 deploy）
 $env:PYTHONPATH = "src"
-python .\scripts\train_from_config.py --config .\configs\train.yaml --output-checkpoint .\artifacts\checkpoints\is3d_latest.pt --switch-to-deploy
+python .\scripts\train_from_config.py --config .\configs\train_stable_v2_16g.yaml --output-checkpoint .\artifacts\checkpoints\is3d_latest.pt --switch-to-deploy
 
 # 5) 导出（仅 state_dict + 硬编码 Mean/Std）
 python .\scripts\export_model.py --config .\configs\train.yaml --output .\artifacts\export\is3d_state_dict.pt --switch-to-deploy
@@ -57,3 +57,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1
 ```
 
 
+## Resume from checkpoint
+```powershell
+# Continue training to a larger --steps target
+python .\scripts\train_from_config.py --config .\configs\train_stable_v2_16g.yaml --steps 4000 --resume-from-checkpoint .\artifacts\checkpoints\is3d_latest.pt --output-checkpoint .\artifacts\checkpoints\is3d_latest.pt
+```

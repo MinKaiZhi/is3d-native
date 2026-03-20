@@ -1,0 +1,37 @@
+# Stable training profile for RTX 5080 16G (Windows native)
+# Focus: smoother optimization under token masking while keeping memory headroom.
+
+batch_size: 2
+steps: 20000
+lr: 0.00006
+weight_decay: 0.02
+grad_accum_steps: 8
+grad_clip_norm: 0.8
+lr_warmup_steps: 300
+lr_min_ratio: 0.2
+use_cosine_lr: true
+
+use_bf16_amp: true
+checkpoint_segments: true
+log_every: 50
+snapshot_dir: artifacts/nan_snapshots
+
+# Real-data training config (CO3D WebDataset shards)
+train_shards: D:/datasets/co3dv2_wds/shard-*.tar
+train_key_include: __images__
+dataloader_workers: 4
+wds_shuffle_buffer: 2048
+
+image_size: 128
+in_channels: 3
+
+fastvit_embed_dim: 256
+fastvit_depth: 6
+fastvit_num_heads: 8
+fastvit_patch_size: 8
+
+triplane_depth: 4
+triplane_num_heads: 8
+triplane_channels: 24
+triplane_resolution: 32
+triplane_token_mask_ratio: 0.10
