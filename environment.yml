@@ -1,0 +1,16 @@
+﻿name: is3d-native
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pytorch>=2.3
+  - torchvision>=0.18
+  - pytorch-cuda=12.1
+  - pip
+  - pip:
+      - webdataset>=0.2.96
+      - pyyaml>=6.0
+      - pytest>=8.0
+      - ruff>=0.5
