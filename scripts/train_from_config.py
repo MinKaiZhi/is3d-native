@@ -11,8 +11,33 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run training from YAML config.")
     parser.add_argument("--config", type=Path, default=Path("configs/train.yaml"))
     parser.add_argument("--train-shards", type=str, default=None, help="Override train shard glob path.")
+    parser.add_argument("--val-shards", type=str, default=None, help="Override validation shard glob path.")
     parser.add_argument("--steps", type=int, default=None, help="Override total training steps.")
     parser.add_argument("--num-workers", type=int, default=None, help="Override dataloader workers.")
+    parser.add_argument(
+        "--eval-every-steps",
+        type=int,
+        default=None,
+        help="Run validation every N steps (0 disables validation during training).",
+    )
+    parser.add_argument(
+        "--val-batches",
+        type=int,
+        default=None,
+        help="Number of validation batches to evaluate each validation run.",
+    )
+    parser.add_argument(
+        "--checkpoint-every-steps",
+        type=int,
+        default=None,
+        help="Save a periodic resume checkpoint every N steps (0 disables periodic saves).",
+    )
+    parser.add_argument(
+        "--checkpoint-keep-last",
+        type=int,
+        default=None,
+        help="Keep only the latest N periodic checkpoints (0 keeps all).",
+    )
     parser.add_argument(
         "--output-checkpoint",
         type=Path,
@@ -39,10 +64,20 @@ def main() -> None:
 
     if args.train_shards is not None:
         cfg.train_shards = args.train_shards
+    if args.val_shards is not None:
+        cfg.val_shards = args.val_shards
     if args.steps is not None:
         cfg.steps = args.steps
     if args.num_workers is not None:
         cfg.dataloader_workers = args.num_workers
+    if args.eval_every_steps is not None:
+        cfg.eval_every_steps = args.eval_every_steps
+    if args.val_batches is not None:
+        cfg.val_batches = args.val_batches
+    if args.checkpoint_every_steps is not None:
+        cfg.checkpoint_every_steps = args.checkpoint_every_steps
+    if args.checkpoint_keep_last is not None:
+        cfg.checkpoint_keep_last = args.checkpoint_keep_last
 
     model = run_training_loop(
         cfg,
@@ -57,4 +92,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -84,8 +84,13 @@ class TriPlaneDecoder(nn.Module):
         out_dim = 3 * cfg.plane_channels * cfg.plane_resolution * cfg.plane_resolution
         self.head = nn.Linear(cfg.embed_dim, out_dim)
 
-    def _apply_token_masking(self, tokens: torch.Tensor, ratio: float) -> torch.Tensor:
-        if ratio <= 0.0 or not self.training:
+    def _apply_token_masking(
+        self,
+        tokens: torch.Tensor,
+        ratio: float,
+        force_masking: bool = False,
+    ) -> torch.Tensor:
+        if ratio <= 0.0 or (not self.training and not force_masking):
             return tokens
 
         mask = torch.rand(tokens.shape[0], tokens.shape[1], device=tokens.device) < ratio
@@ -97,9 +102,10 @@ class TriPlaneDecoder(nn.Module):
         tokens: torch.Tensor,
         use_checkpoint: bool = True,
         token_mask_ratio: float | None = None,
+        force_masking: bool = False,
     ) -> torch.Tensor:
         ratio = self.cfg.token_mask_ratio if token_mask_ratio is None else token_mask_ratio
-        x = self._apply_token_masking(tokens, ratio)
+        x = self._apply_token_masking(tokens, ratio, force_masking=force_masking)
 
         for block in self.blocks:
             if use_checkpoint and self.training:
@@ -116,6 +122,3 @@ class TriPlaneDecoder(nn.Module):
             self.cfg.plane_resolution,
             self.cfg.plane_resolution,
         )
-
-
-

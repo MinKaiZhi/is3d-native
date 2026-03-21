@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 import torch
+from torch.utils.data import DataLoader
 
 import is3d_native.training as training
 from is3d_native.inference import safe_torch_load
@@ -110,3 +111,64 @@ def test_resume_from_legacy_state_dict_checkpoint(monkeypatch) -> None:
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
+
+def test_periodic_checkpoint_save_and_keep_last(monkeypatch) -> None:
+    monkeypatch.setattr(training, "_select_device", lambda: torch.device("cpu"))
+
+    work_dir = _new_test_dir()
+    try:
+        cfg = _tiny_train_cfg(snapshot_dir=work_dir / "nan_periodic", steps=6)
+        cfg.grad_accum_steps = 1
+        cfg.checkpoint_every_steps = 2
+        cfg.checkpoint_keep_last = 2
+
+        latest_ckpt = work_dir / "latest.pt"
+        training.run_training_loop(cfg, output_checkpoint=latest_ckpt)
+
+        periodic_paths = sorted(work_dir.glob("latest.step_*.pt"))
+        assert [path.name for path in periodic_paths] == [
+            "latest.step_000004.pt",
+            "latest.step_000006.pt",
+        ]
+
+        assert latest_ckpt.exists()
+        latest_payload = safe_torch_load(latest_ckpt)
+        assert latest_payload["train_state"]["step"] == 6
+
+        for path in periodic_paths:
+            payload = safe_torch_load(path)
+            assert "state_dict" in payload
+            assert "optimizer" in payload
+            assert "scaler" in payload
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_validation_metrics_are_logged(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(training, "_select_device", lambda: torch.device("cpu"))
+
+    work_dir = _new_test_dir()
+    try:
+        cfg = _tiny_train_cfg(snapshot_dir=work_dir / "nan_val", steps=2)
+        cfg.grad_accum_steps = 1
+        cfg.eval_every_steps = 1
+        cfg.val_batches = 2
+
+        val_samples = [
+            torch.rand(3, cfg.image_size, cfg.image_size),
+            torch.rand(3, cfg.image_size, cfg.image_size),
+            torch.rand(3, cfg.image_size, cfg.image_size),
+        ]
+        val_loader = DataLoader(val_samples, batch_size=1, num_workers=0)
+        monkeypatch.setattr(training, "_build_val_loader", lambda _: val_loader)
+
+        training.run_training_loop(cfg, output_checkpoint=work_dir / "val_latest.pt")
+
+        captured = capsys.readouterr().out
+        assert "[val step 1]" in captured
+        assert "[val step 2]" in captured
+        assert "mse=" in captured
+        assert "mae=" in captured
+        assert "rmse=" in captured
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)

@@ -13,14 +13,23 @@ use_cosine_lr: true
 
 use_bf16_amp: true
 checkpoint_segments: true
+checkpoint_every_steps: 200
+checkpoint_keep_last: 10
 log_every: 50
 snapshot_dir: artifacts/nan_snapshots
 
 # Real-data training config (CO3D WebDataset shards)
 train_shards: D:/datasets/co3dv2_wds/shard-*.tar
 train_key_include: __images__
+val_shards: null
+val_key_include: __images__
 dataloader_workers: 4
 wds_shuffle_buffer: 4096
+val_wds_shuffle_buffer: 0
+
+# Validation controls (set val_shards + eval_every_steps to enable periodic validation)
+eval_every_steps: 0
+val_batches: 32
 
 image_size: 128
 in_channels: 3

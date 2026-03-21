@@ -34,6 +34,8 @@ class TrainConfig:
 
     use_bf16_amp: bool = True
     checkpoint_segments: bool = True
+    checkpoint_every_steps: int = 0
+    checkpoint_keep_last: int = 0
     log_every: int = 20
     snapshot_dir: Path = Path("artifacts/nan_snapshots")
 
@@ -55,8 +57,13 @@ class TrainConfig:
 
     train_shards: str | None = None
     train_key_include: str | None = "__images__"
+    val_shards: str | None = None
+    val_key_include: str | None = "__images__"
     dataloader_workers: int = 4
     wds_shuffle_buffer: int = 1024
+    val_wds_shuffle_buffer: int = 0
+    eval_every_steps: int = 0
+    val_batches: int = 20
 
 
 @dataclass
@@ -165,28 +172,55 @@ def _prepare_images(
     return batch.to(device, non_blocking=(device.type == "cuda"))
 
 
-def _build_train_loader(config: TrainConfig) -> DataLoader | None:
-    if not config.train_shards:
+def _build_wds_loader(
+    *,
+    source_pattern: str | None,
+    key_include: str | None,
+    shuffle_buffer: int,
+    batch_size: int,
+    num_workers: int,
+) -> DataLoader | None:
+    if not source_pattern:
         return None
 
-    shard_urls = _resolve_wds_shards(config.train_shards)
+    shard_urls = _resolve_wds_shards(source_pattern)
     dataset = wds.WebDataset(shard_urls, shardshuffle=False, cache_size=0)
 
-    if config.wds_shuffle_buffer > 0:
-        dataset = dataset.shuffle(config.wds_shuffle_buffer)
+    if shuffle_buffer > 0:
+        dataset = dataset.shuffle(shuffle_buffer)
 
-    if config.train_key_include:
-        dataset = dataset.select(partial(_sample_key_contains, key_filter=config.train_key_include))
+    if key_include:
+        dataset = dataset.select(partial(_sample_key_contains, key_filter=key_include))
 
     dataset = dataset.map(_extract_image_tensor)
 
     return DataLoader(
         dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=num_workers > 0,
+        collate_fn=_collate_keep_list,
+    )
+
+
+def _build_train_loader(config: TrainConfig) -> DataLoader | None:
+    return _build_wds_loader(
+        source_pattern=config.train_shards,
+        key_include=config.train_key_include,
+        shuffle_buffer=config.wds_shuffle_buffer,
         batch_size=config.batch_size,
         num_workers=config.dataloader_workers,
-        pin_memory=torch.cuda.is_available(),
-        persistent_workers=config.dataloader_workers > 0,
-        collate_fn=_collate_keep_list,
+    )
+
+
+def _build_val_loader(config: TrainConfig) -> DataLoader | None:
+    return _build_wds_loader(
+        source_pattern=config.val_shards,
+        key_include=config.val_key_include,
+        shuffle_buffer=config.val_wds_shuffle_buffer,
+        batch_size=config.batch_size,
+        num_workers=config.dataloader_workers,
     )
 
 
@@ -206,6 +240,64 @@ def _iter_train_images(config: TrainConfig, device: torch.device) -> Iterator[to
     while True:
         for batch in loader:
             yield _prepare_images(batch, config, device)
+
+
+def _run_validation(
+    *,
+    model: IS3DModel,
+    config: TrainConfig,
+    device: torch.device,
+    loader: DataLoader,
+) -> dict[str, float]:
+    was_training = model.training
+    model.eval()
+
+    total_mse = 0.0
+    total_mae = 0.0
+    num_batches = 0
+
+    use_amp = config.use_bf16_amp and device.type == "cuda"
+    try:
+        with torch.no_grad():
+            for batch_idx, batch in enumerate(loader):
+                if batch_idx >= config.val_batches:
+                    break
+
+                images = _prepare_images(batch, config, device)
+                with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
+                    target = model(images, use_checkpoint=False, token_mask_ratio=0.0)
+                    pred = model(
+                        images,
+                        use_checkpoint=False,
+                        token_mask_ratio=config.triplane_token_mask_ratio,
+                        force_masking=True,
+                    )
+
+                diff = pred - target
+                mse = torch.mean(diff * diff)
+                mae = torch.mean(torch.abs(diff))
+
+                if torch.isnan(mse) or torch.isnan(mae):
+                    raise RuntimeError(f"NaN detected during validation at batch {batch_idx}.")
+
+                total_mse += float(mse.item())
+                total_mae += float(mae.item())
+                num_batches += 1
+    finally:
+        if was_training:
+            model.train()
+
+    if num_batches == 0:
+        raise RuntimeError("Validation loader yielded zero batches. Check val_shards/val_key_include.")
+
+    mean_mse = total_mse / num_batches
+    mean_mae = total_mae / num_batches
+    return {
+        "val_mse": mean_mse,
+        "val_mae": mean_mae,
+        "val_rmse": math.sqrt(max(mean_mse, 0.0)),
+        "val_batches": float(num_batches),
+    }
 
 
 def build_model(config: TrainConfig) -> IS3DModel:
@@ -331,6 +423,24 @@ def _build_checkpoint_payload(
     }
 
 
+def _periodic_checkpoint_path(base_path: Path, step: int) -> Path:
+    return base_path.with_name(f"{base_path.stem}.step_{step:06d}{base_path.suffix}")
+
+
+def _prune_periodic_checkpoints(base_path: Path, keep_last: int) -> None:
+    if keep_last <= 0:
+        return
+
+    pattern = f"{base_path.stem}.step_*{base_path.suffix}"
+    checkpoints = sorted(base_path.parent.glob(pattern))
+    stale_count = len(checkpoints) - keep_last
+    if stale_count <= 0:
+        return
+
+    for path in checkpoints[:stale_count]:
+        path.unlink(missing_ok=True)
+
+
 def _restore_rng_state(payload: dict[str, object], device: torch.device) -> None:
     rng_state = payload.get("rng_state")
     if not isinstance(rng_state, dict):
@@ -434,6 +544,14 @@ def run_training_loop(
         raise ValueError("token_mask_start_ratio must be in [0, 1]")
     if not (0.0 <= config.triplane_token_mask_ratio <= 1.0):
         raise ValueError("triplane_token_mask_ratio must be in [0, 1]")
+    if config.checkpoint_every_steps < 0:
+        raise ValueError("checkpoint_every_steps must be >= 0")
+    if config.checkpoint_keep_last < 0:
+        raise ValueError("checkpoint_keep_last must be >= 0")
+    if config.eval_every_steps < 0:
+        raise ValueError("eval_every_steps must be >= 0")
+    if config.eval_every_steps > 0 and config.val_batches <= 0:
+        raise ValueError("val_batches must be > 0 when eval_every_steps > 0")
 
     device = _select_device()
     set_runtime_flags(device)
@@ -473,6 +591,21 @@ def run_training_loop(
         )
     else:
         print("Training source: synthetic random tensors")
+
+    val_loader: DataLoader | None = None
+    if config.eval_every_steps > 0:
+        val_loader = _build_val_loader(config)
+        if val_loader is not None:
+            print(
+                "Validation source: "
+                f"{config.val_shards} | key_filter={config.val_key_include} | "
+                f"workers={config.dataloader_workers} | eval_every={config.eval_every_steps} | "
+                f"val_batches={config.val_batches}"
+            )
+        else:
+            print("Validation disabled: eval_every_steps > 0 but val_shards is not configured.")
+    elif config.val_shards:
+        print("Validation shards configured but eval_every_steps=0, skipping periodic validation.")
 
     model.train()
     optimizer.zero_grad(set_to_none=True)
@@ -528,7 +661,43 @@ def run_training_loop(
                 msg += f" | device={device.type}"
             print(msg)
 
+        if val_loader is not None and config.eval_every_steps > 0 and step % config.eval_every_steps == 0:
+            val_metrics = _run_validation(
+                model=model,
+                config=config,
+                device=device,
+                loader=val_loader,
+            )
+            val_msg = (
+                f"[val step {step}] mse={val_metrics['val_mse']:.6f}"
+                f" | mae={val_metrics['val_mae']:.6f}"
+                f" | rmse={val_metrics['val_rmse']:.6f}"
+                f" | batches={int(val_metrics['val_batches'])}"
+            )
+            print(val_msg)
+
         state.step = step
+
+        if (
+            output_checkpoint is not None
+            and config.checkpoint_every_steps > 0
+            and step % config.checkpoint_every_steps == 0
+        ):
+            output_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            periodic_path = _periodic_checkpoint_path(output_checkpoint, step)
+            payload = _build_checkpoint_payload(
+                model=model,
+                optimizer=optimizer,
+                scaler=scaler,
+                config=config,
+                state=state,
+            )
+            torch.save(payload, periodic_path)
+            print(
+                f"Saved periodic checkpoint: {periodic_path} "
+                f"(step={state.step}, updates={state.update_step})"
+            )
+            _prune_periodic_checkpoints(output_checkpoint, config.checkpoint_keep_last)
 
     if accum_steps != 0:
         state.update_step += 1
@@ -559,4 +728,3 @@ def run_training_loop(
         )
 
     return model
-

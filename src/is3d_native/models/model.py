@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 
@@ -28,12 +28,14 @@ class IS3DModel(nn.Module):
         images: torch.Tensor,
         use_checkpoint: bool = True,
         token_mask_ratio: float | None = None,
+        force_masking: bool = False,
     ) -> torch.Tensor:
         tokens = self.backbone(images, use_checkpoint=use_checkpoint)
         return self.decoder(
             tokens,
             use_checkpoint=use_checkpoint,
             token_mask_ratio=token_mask_ratio,
+            force_masking=force_masking,
         )
 
     def switch_to_deploy(self) -> None:
